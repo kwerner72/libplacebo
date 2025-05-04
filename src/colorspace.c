@@ -430,6 +430,7 @@ bool pl_hdr_metadata_equal(const struct pl_hdr_metadata *a,
            a->scene_avg == b->scene_avg &&
            pl_hdr_bezier_equal(&a->ootf, &b->ootf) &&
            a->max_pq_y == b->max_pq_y &&
+           a->min_pq_y == b->min_pq_y &&
            a->avg_pq_y == b->avg_pq_y;
 }
 
@@ -453,6 +454,8 @@ void pl_hdr_metadata_merge(struct pl_hdr_metadata *orig,
         orig->ootf = update->ootf;
     if (!orig->max_pq_y)
         orig->max_pq_y = update->max_pq_y;
+    if (!orig->min_pq_y)
+        orig->min_pq_y = update->min_pq_y;
     if (!orig->avg_pq_y)
         orig->avg_pq_y = update->avg_pq_y;
 }
@@ -796,7 +799,7 @@ void pl_color_space_nominal_luma_ex(const struct pl_nominal_luma_params *params)
     }
 
     // Clamp to sane value range
-    const float hdr_min = pl_hdr_rescale(PL_HDR_NITS, scaling, PL_COLOR_HDR_BLACK);
+    const float hdr_min = pl_hdr_rescale(PL_HDR_PQ, scaling, csp->hdr.min_pq_y);
     const float hdr_max = pl_hdr_rescale(PL_HDR_PQ,   scaling, 1.0f);
     max_luma = max_luma ? PL_CLAMP(max_luma, hdr_min, hdr_max) : 0;
     min_luma = min_luma ? PL_CLAMP(min_luma, hdr_min, hdr_max) : 0;

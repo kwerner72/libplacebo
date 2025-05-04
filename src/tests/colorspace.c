@@ -424,6 +424,7 @@ int main()
             .min_luma = 0.005,
             .max_luma = 4000,
             .max_pq_y = pl_hdr_rescale(PL_HDR_NITS, PL_HDR_PQ, 1000),
+            .min_pq_y = pl_hdr_rescale(PL_HDR_NITS, PL_HDR_PQ, 0),
             .avg_pq_y = pl_hdr_rescale(PL_HDR_NITS, PL_HDR_PQ, 250),
         },
     };

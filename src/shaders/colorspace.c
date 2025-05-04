@@ -929,7 +929,7 @@ enum {
     // by half the PQ range (~90 nits), effectively clumping the SDR part
     // of the image into a single histogram bin.
     HIST_BITS   = 7,
-    HIST_BIAS   = 1 << (HIST_BITS - 1),
+    HIST_BIAS   = 0,
     HIST_BINS   = (1 << HIST_BITS) - HIST_BIAS,
 
     // Convert from histogram bin to (starting) PQ value
@@ -990,6 +990,7 @@ struct sh_color_map_obj {
         pl_buf readback;                        // readback buffer (fallback)
         float avg_pq;                           // current (smoothed) values
         float max_pq;
+        float min_pq;
     } peak;
 };
 
@@ -1074,6 +1075,28 @@ static float measure_peak(const struct peak_buf_data *data, float percentile)
     pl_unreachable();
 }
 
+static float measure_black(const struct peak_buf_data *data, float percentile)
+{
+    unsigned next = 0;
+    float slice_ratio = 0;
+    for (int i = 0; i < HIST_BINS; i++) {
+        for (int k = 0; k < SLICES; k++){
+            next += data->frame_hist[k][i];
+            if (next < 10000) //Counterpart to the hdr-peak-percentile, the first 10'000 pixels are ignored.
+                slice_ratio = k; // will be updated until 10'000 pixels are reached. Yes! The if function will be entered every time until that.
+            //most movies have slight noise, therefore this is senseful to clip them.
+        }
+        if (next < 1000)
+            continue;
+        const float ratio = slice_ratio / SLICES;
+        float pq_low  = PL_MAX((float) HIST_PQ(i) / PQ_MAX, PL_COLOR_HDR_BLACK);
+        const float pq_high = (float) HIST_PQ(i+1) / PQ_MAX;
+
+        const float MAX_BLACK = 0.03f;
+        return PL_MIN(PL_MIX(pq_low, pq_high, ratio), MAX_BLACK);
+    }
+}
+
 // if `force` is true, ensures the buffer is read, even if `allow_delayed`
 static void update_peak_buf(pl_gpu gpu, struct sh_color_map_obj *obj, bool force)
 {
@@ -1118,19 +1141,23 @@ static void update_peak_buf(pl_gpu gpu, struct sh_color_map_obj *obj, bool force
         frame_wg_count  += data.frame_wg_count[k];
         frame_wg_active += data.frame_wg_active[k];
     }
-    float avg_pq, max_pq;
+    float avg_pq, max_pq, min_pq;
     if (frame_wg_active) {
         avg_pq = (float) frame_sum_pq / (frame_wg_active * PQ_MAX);
         max_pq = measure_peak(&data, params->percentile);
+
+        min_pq = measure_black(&data, params->percentile);
+        min_pq = min_pq - (min_pq * avg_pq);
     } else {
         // Solid black frame
-        avg_pq = max_pq = PL_COLOR_HDR_BLACK;
+        avg_pq = max_pq = min_pq = PL_COLOR_HDR_BLACK;
     }
 
     if (!obj->peak.avg_pq) {
         // Set the initial value accordingly if it contains no data
         obj->peak.avg_pq = avg_pq;
         obj->peak.max_pq = max_pq;
+        obj->peak.min_pq = min_pq;
     } else {
         // Ignore small deviations from existing peak (rounding error)
         static const float epsilon = 1.0f / PQ_MAX;
@@ -1138,12 +1165,15 @@ static void update_peak_buf(pl_gpu gpu, struct sh_color_map_obj *obj, bool force
             avg_pq = obj->peak.avg_pq;
         if (fabsf(max_pq - obj->peak.max_pq) < epsilon)
             max_pq = obj->peak.max_pq;
+        if (fabsf(min_pq - obj->peak.min_pq) < epsilon)
+            min_pq = obj->peak.min_pq;
     }
 
     // Use an IIR low-pass filter to smooth out the detected values
     const float coeff = iir_coeff(params->smoothing_period);
     obj->peak.avg_pq += coeff * (avg_pq - obj->peak.avg_pq);
     obj->peak.max_pq += coeff * (max_pq - obj->peak.max_pq);
+    obj->peak.min_pq += coeff * (min_pq - obj->peak.min_pq);
 
     // Scene change hysteresis
     if (params->scene_threshold_low > 0 && params->scene_threshold_high > 0) {
@@ -1155,6 +1185,7 @@ static void update_peak_buf(pl_gpu gpu, struct sh_color_map_obj *obj, bool force
         const float mix_coeff = pl_smoothstep(thresh_low, thresh_high, delta);
         obj->peak.avg_pq = PL_MIX(obj->peak.avg_pq, avg_pq, mix_coeff);
         obj->peak.max_pq = PL_MIX(obj->peak.max_pq, max_pq, mix_coeff);
+        obj->peak.min_pq = PL_MIX(obj->peak.min_pq, min_pq, mix_coeff);
     }
 }
 
@@ -1369,6 +1400,7 @@ bool pl_get_detected_hdr_metadata(const pl_shader_obj state,
         return false;
 
     out->max_pq_y = obj->peak.max_pq;
+    out->min_pq_y = obj->peak.min_pq;
     out->avg_pq_y = obj->peak.avg_pq;
     return true;
 }
