@@ -316,6 +316,11 @@ highlights.
 Defaults to `100.0`. The `high_quality` preset instead sets this to `99.995`,
 which is very conservative and should cause no major issues in typical content.
 
+### `black_percentile=<0.0..100.0>`
+
+Which percentile of the input image brightness histogram to consider as the
+true black of the scene.
+
 ### `black_cutoff=<0.0..100.0>`
 
 Black cutoff strength. To prevent unnatural pixel shimmer and excessive

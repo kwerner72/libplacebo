@@ -1024,25 +1024,38 @@ static inline float iir_coeff(float rate)
     return 1.0f - expf(-1.0f / rate);
 }
 
-static float measure_peak(const struct peak_buf_data *data, float percentile)
+struct peak_result {
+    float peak_pq;
+    float total_pixels;
+};
+
+static struct peak_result measure_peak(const struct peak_buf_data *data, float percentile)
 {
+    struct peak_result result = {0};
+
     unsigned frame_max_pq = data->frame_max_pq[0];
     for (int k = 1; k < SLICES; k++)
         frame_max_pq = PL_MAX(frame_max_pq, data->frame_max_pq[k]);
     const float frame_max = (float) frame_max_pq / PQ_MAX;
-    if (percentile <= 0 || percentile >= 100)
-        return frame_max;
-    unsigned total_pixels = 0;
+    if (percentile <= 0 || percentile >= 100) {
+        result.peak_pq = frame_max;
+        return result;
+    }
+    result.total_pixels = 0;
     for (int k = 0; k < SLICES; k++) {
         for (int i = 0; i < HIST_BINS; i++)
-            total_pixels += data->frame_hist[k][i];
+            result.total_pixels += data->frame_hist[k][i];
     }
-    if (!total_pixels) // no histogram data available?
-        return frame_max;
+    if (!result.total_pixels) { // no histogram data available?
+        result.peak_pq = frame_max;
+        return result;
+    }
 
-    const unsigned target_pixel = ceilf(percentile / 100.0f * total_pixels);
-    if (target_pixel >= total_pixels)
-        return frame_max;
+    const unsigned target_pixel = ceilf(percentile / 100.0f * result.total_pixels);
+    if (target_pixel >= result.total_pixels) {
+        result.peak_pq = frame_max;
+        return result;
+    }
 
     unsigned sum = 0;
     for (int i = 0; i < HIST_BINS; i++) {
@@ -1062,31 +1075,36 @@ static float measure_peak(const struct peak_buf_data *data, float percentile)
         // PQ luminance associated with count_low/high respectively
         const float pq_low  = (float) HIST_PQ(i)     / PQ_MAX;
         float pq_high       = (float) HIST_PQ(i + 1) / PQ_MAX;
-        if (count_high > total_pixels) // special case for last histogram bin
+        if (count_high > result.total_pixels) // special case for last histogram bin
             pq_high = frame_max;
 
         // Position of `target_pixel` inside this bin, assumes pixels are
         // equidistributed inside a histogram bin
         const float ratio = (float) (target_pixel - count_low) /
                                     (count_high - count_low);
-        return PL_MIX(pq_low, pq_high, ratio);
+
+        result.peak_pq = PL_MIX(pq_low, pq_high, ratio);
+        return result;
     }
 
     pl_unreachable();
 }
 
-static float measure_black(const struct peak_buf_data *data, float percentile)
+static float measure_black(const struct peak_buf_data *data, float percentile, float total_pixels)
 {
     unsigned next = 0;
     float slice_ratio = 0;
+    const unsigned target_pixel = ceilf(percentile / 100.0f * total_pixels);
+    const unsigned min_pixel = target_pixel / 10;
+
     for (int i = 0; i < HIST_BINS; i++) {
         for (int k = 0; k < SLICES; k++){
             next += data->frame_hist[k][i];
-            if (next < 10000) //Counterpart to the hdr-peak-percentile, the first 10'000 pixels are ignored.
+            if (next < target_pixel) //Counterpart to the hdr-peak-percentile, the first 10'000 pixels are ignored.
                 slice_ratio = k; // will be updated until 10'000 pixels are reached. Yes! The if function will be entered every time until that.
             //most movies have slight noise, therefore this is senseful to clip them.
         }
-        if (next < 1000)
+        if (next < min_pixel)
             continue;
         const float ratio = slice_ratio / SLICES;
         float pq_low  = PL_MAX((float) HIST_PQ(i) / PQ_MAX, PL_COLOR_HDR_BLACK);
@@ -1144,9 +1162,10 @@ static void update_peak_buf(pl_gpu gpu, struct sh_color_map_obj *obj, bool force
     float avg_pq, max_pq, min_pq;
     if (frame_wg_active) {
         avg_pq = (float) frame_sum_pq / (frame_wg_active * PQ_MAX);
-        max_pq = measure_peak(&data, params->percentile);
+        struct peak_result result = measure_peak(&data, params->percentile);
+        max_pq = result.peak_pq;
 
-        min_pq = measure_black(&data, params->percentile);
+        min_pq = measure_black(&data, params->black_percentile, result.total_pixels);
         min_pq = min_pq - (min_pq * avg_pq);
     } else {
         // Solid black frame
