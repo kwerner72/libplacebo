@@ -1110,8 +1110,7 @@ static float measure_black(const struct peak_buf_data *data, float percentile, f
         float pq_low  = PL_MAX((float) HIST_PQ(i) / PQ_MAX, PL_COLOR_HDR_BLACK);
         const float pq_high = (float) HIST_PQ(i+1) / PQ_MAX;
 
-        const float MAX_BLACK = 0.03f;
-        return PL_MIN(PL_MIX(pq_low, pq_high, ratio), MAX_BLACK);
+        return PL_MIX(pq_low, pq_high, ratio);
     }
 }
 
@@ -1166,7 +1165,7 @@ static void update_peak_buf(pl_gpu gpu, struct sh_color_map_obj *obj, bool force
         max_pq = result.peak_pq;
 
         min_pq = measure_black(&data, params->black_percentile, result.total_pixels);
-        min_pq = min_pq - (min_pq * avg_pq);
+        min_pq = PL_MAX(min_pq - (min_pq * PL_MIN((avg_pq * avg_pq * 4), 1.0f)), PL_COLOR_HDR_BLACK);
     } else {
         // Solid black frame
         avg_pq = max_pq = min_pq = PL_COLOR_HDR_BLACK;
