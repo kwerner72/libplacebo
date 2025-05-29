@@ -1882,7 +1882,6 @@ static bool pass_read_image(struct pass_state *pass)
         // Fix bit depth normalization before applying LUT
         float scale = pl_color_repr_normalize(&pass->img.repr);
         GLSL("color *= vec4("$"); \n", SH_FLOAT(scale));
-        pl_shader_set_alpha(sh, &pass->img.repr, PL_ALPHA_INDEPENDENT);
         pl_shader_custom_lut(sh, image->lut, &rr->lut_state[LUT_IMAGE]);
 
         if (lut_type == PL_LUT_CONVERSION) {
@@ -2428,6 +2427,10 @@ static bool pass_output_target(struct pass_state *pass)
     else if (params->skip_target_clearing)
         background = PL_CLEAR_SKIP;
 
+    /* Avoid unnecessary round trip through premultiplied alpha */
+    if (params->background_transparency >= 1.0)
+        background = PL_CLEAR_SKIP;
+
     bool has_alpha = target->repr.alpha != PL_ALPHA_NONE || params->blend_params;
     bool need_blend = background != PL_CLEAR_SKIP || !has_alpha;
     if (img->comps == 4 && need_blend) {
@@ -2464,9 +2467,10 @@ static bool pass_output_target(struct pass_state *pass)
         case PL_CLEAR_SKIP: break;
         case PL_CLEAR_MODE_COUNT: pl_unreachable();
         }
-    } else if (img->comps == 4 && has_alpha) {
-        pl_shader_set_alpha(sh, &img->repr, target->repr.alpha);
     }
+
+    if (img->comps == 4 && has_alpha)
+        pl_shader_set_alpha(sh, &img->repr, target->repr.alpha);
 
     // Apply the color scale separately, after encoding is done, to make sure
     // that the intermediate FBO (if any) has the correct precision.
@@ -2475,11 +2479,8 @@ static bool pass_output_target(struct pass_state *pass)
     enum pl_lut_type lut_type = guess_frame_lut_type(target, true);
     if (lut_type != PL_LUT_CONVERSION)
         pl_shader_encode_color(sh, &repr);
-    if (lut_type == PL_LUT_NATIVE) {
-        pl_shader_set_alpha(sh, &img->repr, PL_ALPHA_INDEPENDENT);
+    if (lut_type == PL_LUT_NATIVE)
         pl_shader_custom_lut(sh, target->lut, &rr->lut_state[LUT_TARGET]);
-        pl_shader_set_alpha(sh, &img->repr, target->repr.alpha);
-    }
 
     // Rotation handling
     if (pass->rotation % PL_ROTATION_180 == PL_ROTATION_90) {
