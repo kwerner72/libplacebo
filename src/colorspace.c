@@ -796,10 +796,11 @@ void pl_color_space_nominal_luma_ex(const struct pl_nominal_luma_params *params)
     {
         max_luma = pl_hdr_rescale(PL_HDR_PQ, scaling, csp->hdr.max_pq_y);
         avg_luma = pl_hdr_rescale(PL_HDR_PQ, scaling, csp->hdr.avg_pq_y);
+        min_luma = pl_hdr_rescale(PL_HDR_PQ, scaling, csp->hdr.min_pq_y);
     }
 
     // Clamp to sane value range
-    const float hdr_min = pl_hdr_rescale(PL_HDR_PQ, scaling, csp->hdr.min_pq_y);
+    const float hdr_min = pl_hdr_rescale(PL_HDR_NITS, scaling, PL_COLOR_HDR_BLACK);
     const float hdr_max = pl_hdr_rescale(PL_HDR_PQ,   scaling, 1.0f);
     max_luma = max_luma ? PL_CLAMP(max_luma, hdr_min, hdr_max) : 0;
     min_luma = min_luma ? PL_CLAMP(min_luma, hdr_min, hdr_max) : 0;
@@ -808,7 +809,7 @@ void pl_color_space_nominal_luma_ex(const struct pl_nominal_luma_params *params)
 
     // PQ is always scaled down to absolute black, ignoring HDR metadata
     if (csp->transfer == PL_COLOR_TRC_PQ)
-        min_luma = hdr_min;
+        min_luma = pl_hdr_rescale(PL_HDR_PQ, scaling, csp->hdr.min_pq_y);
 
     // Baseline/fallback metadata, inferred entirely from the colorspace
     // description and built-in default assumptions
